@@ -1,0 +1,732 @@
+Build the complete app **BOARDPASS** in one pass. Read this entire prompt first, then build in the order listed at the end. Do not skip anything. Do not add features not listed. Do not ask questions — everything you need is here.
+
+---
+
+## THE APP
+
+BOARDPASS is the daily app for every Kenyan nurse, employed or unemployed. Interview preparation plus ward readiness plus community, in one mobile-first PWA.
+
+Tagline: *Every Kenyan nurse. Every shift. Every interview. Ready.*
+
+Founder story: The founder is an unemployed Kenyan male nurse. He went to what he thought was a casual meeting with a hospital boss that turned into a surprise interview. He was asked Kenyan-specific questions no YouTube video prepares you for. He froze. This app exists so no Kenyan nurse freezes again.
+
+North star for every screen: *"Finally — someone who actually understands what we go through."*
+
+---
+
+## ABSOLUTE DESIGN LAW — READ THIS FIRST
+
+**ZERO BORDERS ANYWHERE IN THE APP.**
+
+Not on cards. Not on buttons. Not on inputs. Not on modals. Not on wrong answer blocks. Not on right answer blocks. Not on list items. Not on tabs. Not on bottom nav. Not anywhere. Zero borders.
+
+If you are about to add a border, stop and use a background color difference instead. This rule overrides everything else.
+
+**The look:** Solid, clean, calm, like GitHub on mobile. Not glassy. Not transparent. Not floating. Every text block sits inside a card with solid background. Nothing floats naked on the background.
+
+**Colors — dark mode:**
+- Background: `#0d1117`
+- Card: `#161b22`
+- Text: `#e6edf3`
+- Muted text: `#8b949e`
+- Accent: `#58a6ff`
+- Danger: `#f85149`
+- Success: `#3fb950`
+- Warning: `#d29922`
+
+**Colors — light mode:**
+- Background: `#ffffff`
+- Card: `#f0f3f6`
+- Text: `#1f2328`
+- Muted text: `#656d76`
+- Accent: `#0969da`
+- Danger: `#cf222e`
+- Success: `#1a7f37`
+- Warning: `#9a6700`
+
+**Other design rules:**
+- Card radius: 8px. Card padding: 16px. Gap between cards: 16px. Gap inside card: 12px. Screen edge padding: 24px.
+- No shadows. No gradients. No glass. No backdrop blur except on modal backdrops.
+- Edge-to-edge mobile. Respect `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)`.
+- Bottom nav has `bg-card` background. Main content has `bg-background`. Color difference is the separator.
+- No emojis in UI (only in user-generated content).
+- Typography: system font or Inter. Body 16px, line height 1.6.
+- Theme: dark, light, or system. Respects user setting, no flash on load.
+- Language: English and Swahili toggle.
+- Every toggle button (bookmark, like, mastered) fills and unfills instantly on tap with no loading spinner. Optimistic update, then silent Supabase write. If write fails, revert and show toast.
+- All dropdowns are custom (never native `<select>`). Bottom sheet on mobile.
+- All modals are bottom sheets on mobile, centered dialogs on desktop.
+- Toasts at top, 3 seconds auto-dismiss, one at a time.
+- Skeleton loaders, not spinners.
+- Every list has an empty state with icon, headline, body, and action button.
+- Every destructive action has a confirmation modal.
+- Wrong answer block: background `rgba(248,81,73,0.12)` dark / `rgba(248,81,73,0.08)` light, radius 8px, padding 16px. **NO border, NO left stripe, NO outline.** The tint itself is the signal.
+- Right answer block: background `rgba(63,185,80,0.12)` dark / `rgba(63,185,80,0.08)` light, radius 8px, padding 16px. **NO border, NO left stripe, NO outline.** The tint itself is the signal.
+
+---
+
+## TECH STACK
+
+- Next.js 14 App Router + TypeScript + Tailwind CSS
+- Supabase: Postgres, email/password auth, storage for images and audio
+- IntaSend for M-Pesa payments (Edge Functions only, never frontend)
+- PWA: `next-pwa` + manifest, offline cache
+- i18n: next-intl, English and Swahili
+- PostHog for analytics (free tier)
+- Sentry for error tracking (free tier)
+- Native path: PWA now, Capacitor wrapper later
+
+---
+
+## ENVIRONMENT
+
+**Frontend `.env.local` — only these two lines:**
+
+```
+VITE_SUPABASE_URL=https://kvrktfhynrdzzyctxkdo.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2cmt0Zmh5bnJkenp5Y3R4a2RvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0Mzc4MDksImV4cCI6MjEwOTAxMzgwOX0.1g1-glmy2jl6imGKVqto-rIJdKNjPkskFPuiM-0hWng
+```
+
+**Never put in frontend:** service role key, IntaSend keys, any secret.
+
+**Supabase Edge Function secrets (set in Supabase Dashboard, not env file):**
+- `INTASEND_PUBLISHABLE_KEY`
+- `INTASEND_SECRET_KEY`
+- `INTASEND_ENVIRONMENT` (sandbox or production)
+
+---
+
+## DATABASE — 20 TABLES, RUN THIS SQL FIRST
+
+```sql
+-- ==============================================================================
+-- BOARDPASS: Full Schema
+-- ==============================================================================
+
+-- 1. USERS (linked to auth.users)
+create table if not exists users (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text unique not null,
+  name text,
+  experience_level text check (experience_level in ('student','no-exp','1yr','bsc','experienced')),
+  target_facility_level text check (target_facility_level in ('2','3','4','5','6','private','faith','ngo')),
+  county text,
+  subscription_status text default 'free' check (subscription_status in ('free','monthly','season','half-year','one-time')),
+  subscription_expires_at timestamptz,
+  coins int default 0,
+  streak_count int default 0,
+  last_active_date date,
+  preferred_language text default 'en' check (preferred_language in ('en','sw')),
+  theme text default 'system' check (theme in ('light','dark','system')),
+  metadata jsonb default '{}'::jsonb,
+  created_at timestamptz default now()
+);
+
+-- 2. SCENARIOS
+create table if not exists scenarios (
+  id uuid primary key default gen_random_uuid(),
+  slug text unique not null,
+  title text not null,
+  swahili_title text,
+  facility_level text not null,
+  department text not null,
+  trap_type text not null,
+  experience_level text not null,
+  scenario_text text not null,
+  swahili_scenario_text text,
+  what_board_tests text not null,
+  wrong_answer text not null,
+  swahili_wrong_answer text,
+  right_answer text not null,
+  swahili_right_answer text,
+  image_url text,
+  english_audio_url text,
+  swahili_audio_url text,
+  external_resources jsonb default '[]'::jsonb,
+  memory_stickiness int default 0,
+  metadata jsonb default '{}'::jsonb,
+  verified_by text,
+  version int default 1,
+  search_vector tsvector generated always as (
+    to_tsvector('english', coalesce(title,'') || ' ' || coalesce(scenario_text,'') || ' ' || coalesce(what_board_tests,''))
+  ) stored,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists scenarios_search_idx on scenarios using gin(search_vector);
+create index if not exists scenarios_level_dept_idx on scenarios(facility_level, department);
+
+-- 3. FACILITIES
+create table if not exists facilities (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  level text not null,
+  county text not null,
+  wards text[] default '{}',
+  notes text,
+  created_by uuid references users(id) on delete set null,
+  verified boolean default false,
+  metadata jsonb default '{}'::jsonb,
+  created_at timestamptz default now()
+);
+
+-- 4. PROGRESS
+create table if not exists progress (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade,
+  scenario_id uuid references scenarios(id) on delete cascade,
+  status text default 'unread' check (status in ('unread','read','revised','mastered')),
+  last_opened timestamptz default now(),
+  mastery_score int default 0,
+  unique(user_id, scenario_id)
+);
+
+-- 5. BOOKMARKS
+create table if not exists bookmarks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade,
+  scenario_id uuid references scenarios(id) on delete cascade,
+  created_at timestamptz default now(),
+  unique(user_id, scenario_id)
+);
+
+-- 6. SCENARIO COMMENTS
+create table if not exists scenario_comments (
+  id uuid primary key default gen_random_uuid(),
+  scenario_id uuid references scenarios(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  body text not null,
+  is_anonymous boolean default false,
+  status text default 'published' check (status in ('published','flagged','removed')),
+  created_at timestamptz default now()
+);
+
+-- 7. SCENARIO COMMENT LIKES
+create table if not exists scenario_comment_likes (
+  id uuid primary key default gen_random_uuid(),
+  comment_id uuid references scenario_comments(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  created_at timestamptz default now(),
+  unique(comment_id, user_id)
+);
+
+-- 8. POSTS
+create table if not exists posts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade,
+  body text not null,
+  image_url text,
+  category text not null check (category in ('interview-exp','ward-tip','general','job-alert')),
+  is_anonymous boolean default false,
+  facility_level text,
+  county text,
+  like_count int default 0,
+  reply_count int default 0,
+  status text default 'published' check (status in ('published','flagged','removed')),
+  metadata jsonb default '{}'::jsonb,
+  created_at timestamptz default now()
+);
+create index if not exists posts_category_idx on posts(category);
+create index if not exists posts_created_at_idx on posts(created_at desc);
+
+-- 9. POST LIKES
+create table if not exists post_likes (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid references posts(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  created_at timestamptz default now(),
+  unique(post_id, user_id)
+);
+
+-- 10. POST REPLIES
+create table if not exists post_replies (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid references posts(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  body text not null,
+  is_anonymous boolean default false,
+  status text default 'published' check (status in ('published','flagged','removed')),
+  created_at timestamptz default now()
+);
+
+-- 11. POST BOOKMARKS
+create table if not exists post_bookmarks (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid references posts(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  created_at timestamptz default now(),
+  unique(post_id, user_id)
+);
+
+-- 12. PAYMENTS
+create table if not exists payments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete set null,
+  amount_kes int not null,
+  plan text not null,
+  mpesa_ref text,
+  intasend_ref text,
+  status text default 'pending' check (status in ('pending','success','failed')),
+  created_at timestamptz default now()
+);
+create index if not exists payments_user_idx on payments(user_id);
+create index if not exists payments_status_idx on payments(status);
+
+-- 13. DRUG CALCS
+create table if not exists drug_calcs (
+  id uuid primary key default gen_random_uuid(),
+  question text not null,
+  options jsonb not null default '[]'::jsonb,
+  correct_index int not null,
+  explanation text not null,
+  created_at timestamptz default now()
+);
+
+-- 14. DRUG CALC ATTEMPTS
+create table if not exists drug_calc_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade,
+  calc_id uuid references drug_calcs(id) on delete cascade,
+  selected_index int not null,
+  is_correct boolean not null,
+  created_at timestamptz default now()
+);
+
+-- 15. WARD TIPS
+create table if not exists ward_tips (
+  id uuid primary key default gen_random_uuid(),
+  tip text not null,
+  department text,
+  created_at timestamptz default now()
+);
+
+-- 16. REPORTS
+create table if not exists reports (
+  id uuid primary key default gen_random_uuid(),
+  reporter_id uuid references users(id) on delete set null,
+  content_type text not null check (content_type in ('post','post_reply','scenario_comment','scenario')),
+  content_id uuid not null,
+  reason text not null check (reason in ('spam','harassment','wrong_info','other')),
+  comment text,
+  status text default 'pending' check (status in ('pending','reviewed','dismissed','actioned')),
+  created_at timestamptz default now()
+);
+
+-- 17. BLOCKED USERS
+create table if not exists blocked_users (
+  id uuid primary key default gen_random_uuid(),
+  blocker_id uuid references users(id) on delete cascade,
+  blocked_id uuid references users(id) on delete cascade,
+  created_at timestamptz default now(),
+  unique(blocker_id, blocked_id)
+);
+
+-- 18. SCENARIO PLAYS
+create table if not exists scenario_plays (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade,
+  scenario_id uuid references scenarios(id) on delete cascade,
+  play_type text not null check (play_type in ('english_audio','swahili_audio','opened')),
+  created_at timestamptz default now()
+);
+
+-- 19. ADMIN LOGS
+create table if not exists admin_logs (
+  id uuid primary key default gen_random_uuid(),
+  admin_id uuid references users(id) on delete set null,
+  action text not null,
+  target_type text not null,
+  target_id uuid,
+  details jsonb default '{}'::jsonb,
+  created_at timestamptz default now()
+);
+
+-- 20. LEGAL PAGES
+create table if not exists legal_pages (
+  id uuid primary key default gen_random_uuid(),
+  slug text unique not null,
+  title text not null,
+  content_md text not null,
+  version text default '1.0',
+  last_updated timestamptz default now(),
+  updated_by uuid references users(id) on delete set null,
+  history jsonb default '[]'::jsonb,
+  created_at timestamptz default now()
+);
+
+-- ==============================================================================
+-- ROW LEVEL SECURITY — enable on all tables
+-- ==============================================================================
+alter table users enable row level security;
+alter table scenarios enable row level security;
+alter table facilities enable row level security;
+alter table progress enable row level security;
+alter table bookmarks enable row level security;
+alter table scenario_comments enable row level security;
+alter table scenario_comment_likes enable row level security;
+alter table posts enable row level security;
+alter table post_likes enable row level security;
+alter table post_replies enable row level security;
+alter table post_bookmarks enable row level security;
+alter table payments enable row level security;
+alter table drug_calcs enable row level security;
+alter table drug_calc_attempts enable row level security;
+alter table ward_tips enable row level security;
+alter table reports enable row level security;
+alter table blocked_users enable row level security;
+alter table scenario_plays enable row level security;
+alter table admin_logs enable row level security;
+alter table legal_pages enable row level security;
+
+-- ==============================================================================
+-- POLICIES — public read content, auth-only write own
+-- ==============================================================================
+
+drop policy if exists "users_read_own" on users;
+create policy "users_read_own" on users for select using (auth.uid() = id);
+drop policy if exists "users_update_own" on users;
+create policy "users_update_own" on users for update using (auth.uid() = id);
+drop policy if exists "users_insert_own" on users;
+create policy "users_insert_own" on users for insert with check (auth.uid() = id);
+
+drop policy if exists "scenarios_public_read" on scenarios;
+create policy "scenarios_public_read" on scenarios for select using (true);
+
+drop policy if exists "facilities_public_read" on facilities;
+create policy "facilities_public_read" on facilities for select using (true);
+drop policy if exists "facilities_auth_insert" on facilities;
+create policy "facilities_auth_insert" on facilities for insert with check (auth.uid() = created_by);
+
+drop policy if exists "progress_own_all" on progress;
+create policy "progress_own_all" on progress for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "bookmarks_own_all" on bookmarks;
+create policy "bookmarks_own_all" on bookmarks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "scenario_comments_public_read" on scenario_comments;
+create policy "scenario_comments_public_read" on scenario_comments for select using (status = 'published');
+drop policy if exists "scenario_comments_auth_insert" on scenario_comments;
+create policy "scenario_comments_auth_insert" on scenario_comments for insert with check (auth.uid() = user_id);
+drop policy if exists "scenario_comments_own_update" on scenario_comments;
+create policy "scenario_comments_own_update" on scenario_comments for update using (auth.uid() = user_id);
+
+drop policy if exists "scenario_comment_likes_public_read" on scenario_comment_likes;
+create policy "scenario_comment_likes_public_read" on scenario_comment_likes for select using (true);
+drop policy if exists "scenario_comment_likes_auth_insert" on scenario_comment_likes;
+create policy "scenario_comment_likes_auth_insert" on scenario_comment_likes for insert with check (auth.uid() = user_id);
+drop policy if exists "scenario_comment_likes_own_delete" on scenario_comment_likes;
+create policy "scenario_comment_likes_own_delete" on scenario_comment_likes for delete using (auth.uid() = user_id);
+
+drop policy if exists "posts_public_read" on posts;
+create policy "posts_public_read" on posts for select using (status = 'published');
+drop policy if exists "posts_auth_insert" on posts;
+create policy "posts_auth_insert" on posts for insert with check (auth.uid() = user_id);
+drop policy if exists "posts_own_update" on posts;
+create policy "posts_own_update" on posts for update using (auth.uid() = user_id);
+
+drop policy if exists "post_likes_public_read" on post_likes;
+create policy "post_likes_public_read" on post_likes for select using (true);
+drop policy if exists "post_likes_auth_insert" on post_likes;
+create policy "post_likes_auth_insert" on post_likes for insert with check (auth.uid() = user_id);
+drop policy if exists "post_likes_own_delete" on post_likes;
+create policy "post_likes_own_delete" on post_likes for delete using (auth.uid() = user_id);
+
+drop policy if exists "post_replies_public_read" on post_replies;
+create policy "post_replies_public_read" on post_replies for select using (status = 'published');
+drop policy if exists "post_replies_auth_insert" on post_replies;
+create policy "post_replies_auth_insert" on post_replies for insert with check (auth.uid() = user_id);
+
+drop policy if exists "post_bookmarks_own_all" on post_bookmarks;
+create policy "post_bookmarks_own_all" on post_bookmarks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "payments_own_read" on payments;
+create policy "payments_own_read" on payments for select using (auth.uid() = user_id);
+
+drop policy if exists "drug_calcs_public_read" on drug_calcs;
+create policy "drug_calcs_public_read" on drug_calcs for select using (true);
+
+drop policy if exists "drug_calc_attempts_own_all" on drug_calc_attempts;
+create policy "drug_calc_attempts_own_all" on drug_calc_attempts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "ward_tips_public_read" on ward_tips;
+create policy "ward_tips_public_read" on ward_tips for select using (true);
+
+drop policy if exists "reports_auth_insert" on reports;
+create policy "reports_auth_insert" on reports for insert with check (auth.uid() = reporter_id);
+drop policy if exists "reports_own_read" on reports;
+create policy "reports_own_read" on reports for select using (auth.uid() = reporter_id);
+
+drop policy if exists "blocked_users_own_all" on blocked_users;
+create policy "blocked_users_own_all" on blocked_users for all using (auth.uid() = blocker_id) with check (auth.uid() = blocker_id);
+
+drop policy if exists "scenario_plays_own_insert" on scenario_plays;
+create policy "scenario_plays_own_insert" on scenario_plays for insert with check (auth.uid() = user_id);
+
+drop policy if exists "admin_logs_admin_read" on admin_logs;
+create policy "admin_logs_admin_read" on admin_logs for select using (
+  exists (select 1 from users where users.id = auth.uid() and (users.metadata->>'is_admin')::boolean = true)
+);
+
+drop policy if exists "legal_pages_public_read" on legal_pages;
+create policy "legal_pages_public_read" on legal_pages for select using (true);
+
+-- ==============================================================================
+-- RPC FUNCTIONS
+-- ==============================================================================
+create or replace function increment_post_likes(p_post_id uuid) returns void as $$
+begin update posts set like_count = like_count + 1 where id = p_post_id; end;
+$$ language plpgsql security definer;
+
+create or replace function decrement_post_likes(p_post_id uuid) returns void as $$
+begin update posts set like_count = greatest(like_count - 1, 0) where id = p_post_id; end;
+$$ language plpgsql security definer;
+
+create or replace function increment_post_replies(p_post_id uuid) returns void as $$
+begin update posts set reply_count = reply_count + 1 where id = p_post_id; end;
+$$ language plpgsql security definer;
+
+create or replace function increment_memory_stickiness(p_scenario_id uuid) returns void as $$
+begin update scenarios set memory_stickiness = memory_stickiness + 1 where id = p_scenario_id; end;
+$$ language plpgsql security definer;
+
+create or replace function increment_streak(p_user_id uuid) returns void as $$
+declare last_date date;
+begin
+  select last_active_date into last_date from users where id = p_user_id;
+  if last_date is null or last_date < current_date then
+    if last_date = current_date - 1 then
+      update users set streak_count = streak_count + 1, last_active_date = current_date where id = p_user_id;
+    else
+      update users set streak_count = 1, last_active_date = current_date where id = p_user_id;
+    end if;
+  end if;
+end;
+$$ language plpgsql security definer;
+
+-- ==============================================================================
+-- AUTO-CREATE USER ON SIGNUP
+-- ==============================================================================
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.users (id, email, name)
+  values (new.id, new.email, coalesce(new.raw_user_meta_data->>'name', split_part(new.email,'@',1)))
+  on conflict (id) do nothing;
+  return new;
+end;
+$$ language plpgsql security definer;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+```
+
+---
+
+## USER FLOW
+
+**Sign up:** Email + password. Required checkbox "I am 18+ and agree to Terms, Privacy, Guidelines." Auto sign in after signup. Land on Home.
+
+**Sign in:** Email + password. "Forgot password?" link below password opens reset modal. Handle all errors gracefully:
+- "Email not confirmed" → show confirmation screen with resend button
+- "Invalid login credentials" → inline "Wrong email or password."
+- "User not found" → inline "No account with this email. Sign up first."
+- "Rate limit" → inline "Too many attempts. Wait a minute."
+
+**No onboarding.** Straight to Home after auth.
+
+**Home / Today tab:** streak counter top right, Resume card (if applicable), Today's scenario card, Drug calc drill, Ward tip, Community preview (3 posts).
+
+**Interview tab:** search bar, filter chips (facility level, department, trap type), "Add facility you're interviewing at" optional prompt, scenario list.
+
+**Scenario detail:** title + badges, image, scenario text (EN/SW toggle), expandable "What they're testing," wrong answer card (tinted red, no border), right answer card (tinted green, no border), audio player (premium, EN/SW), external resources, comments, action row (Mark Read/Revised/Mastered, Save, Share, Download offline).
+
+**Paywall:** after 5 free scenarios. Plans: Monthly KES 299, Season KES 699 (3mo), Half-year KES 1,199 (6mo), One-time KES 2,499 (first 100 only). M-Pesa via IntaSend Edge Function only.
+
+**Community tab:** pinned guidelines banner, 4 filter chips (Interview Experiences, Ward Tips, General, Job Alerts), feed of posts, floating [+ Post] button (premium only), report button on every post.
+
+**Profile tab:** avatar, email, subscription card, stats (streak, read, mastered, saved, coins), streak calendar, saved scenarios, settings (language EN/SW, theme light/dark/system, notification toggle, analytics toggle, facility), Legal section (Privacy, Terms, Guidelines, Cookies, Data Deletion, app version), Delete account button, Logout.
+
+**Admin panel** (`/admin`, password-gated, only users with `metadata.is_admin = true`): scenarios CRUD, reported posts moderation, facilities verify, legal pages editor with version history, analytics summary, user list. All destructive actions require typing "DELETE" to confirm. All actions logged to `admin_logs`.
+
+---
+
+## AUTH — CRITICAL
+
+Tell the user in the README:
+1. In Supabase Dashboard → Authentication → Providers → Email → turn OFF "Confirm email"
+2. Save
+
+In the app, handle "Email not confirmed" gracefully even after this is off (in case it gets re-enabled).
+
+---
+
+## PAYMENTS — EDGE FUNCTIONS ONLY
+
+Build two Supabase Edge Functions, never frontend payment logic.
+
+**`supabase/functions/intasend-stk/index.ts`:**
+- Receives phone, amount, plan, user_id from frontend
+- Reads `INTASEND_SECRET_KEY`, `INTASEND_PUBLISHABLE_KEY`, `INTASEND_ENVIRONMENT` from `Deno.env.get()`
+- Calls IntaSend STK Push API (sandbox or production based on env var)
+- Inserts into `payments` table with status 'pending'
+- Returns response to frontend
+
+**`supabase/functions/mpesa-callback/index.ts`:**
+- Receives webhook from IntaSend
+- Finds payment by invoice ref
+- Updates `payments.status = 'success'` and `mpesa_ref`
+- Calculates expiry: monthly +1mo, season +3mo, half-year +6mo, one-time +100yr
+- Updates `users.subscription_status` and `subscription_expires_at`
+
+**Frontend paywall flow:**
+1. Select plan
+2. Enter phone (pre-filled from metadata if available)
+3. Tap [Pay with M-Pesa] → confirm modal with amount and phone
+4. Call Edge Function `intasend-stk`
+5. Show "Check your phone for M-Pesa prompt. Enter PIN."
+6. Poll `payments` table every 3s for 60s
+7. On `status = 'success'` → close modal, success toast, unlock content
+8. On timeout → show "We did not receive confirmation. If you paid, contact support with reference [ref]."
+
+Subscription check reads from `users` table only. One query on load. No joins.
+
+---
+
+## OFFLINE
+
+Service worker caches: home shell, last 50 scenarios viewed, downloaded scenarios (free and premium both), audio files user tapped, legal pages.
+
+"Download for offline" button on every scenario. Progress writes queue in IndexedDB, sync to Supabase when online.
+
+Offline banner at top when `navigator.onLine === false`: "Offline — showing saved content."
+
+Sync indicator when queued writes flush.
+
+---
+
+## COMMUNITY SAFETY
+
+- Report button on every post, comment, and reply (visible always, not hidden)
+- Report modal: reason radio (Spam, Harassment, Wrong info, Other) + optional comment
+- 3+ reports → status 'flagged' → hidden from feed → admin review
+- Block user button on every profile
+- Blocked users' content hidden from blocker
+- Profanity filter on post/reply/comment bodies (English + Swahili list)
+- External links shown as plain text until admin verifies
+- Image upload: JPG/PNG/WebP only, max 5MB, compress client-side to 1MB, strip EXIF
+- Never show user email publicly
+- Anonymous posts never reveal name or email
+- Rate limits: 5 posts/day, 20 comments/day, 3 reports/day per user
+
+---
+
+## LEGAL PAGES
+
+Build these five routes as static pages fetching content from `legal_pages` table:
+
+- `/privacy` — Privacy Policy (Kenya DPA 2019 compliant)
+- `/terms` — Terms of Service (includes medical disclaimer, no refunds, coins have no cash value)
+- `/guidelines` — Community Guidelines (short, human, Instagram-style)
+- `/data-deletion` — Data Deletion (how to delete account, what gets deleted, 7-year payment retention per Kenyan tax law)
+- `/cookies` — Cookie Notice (essential auth cookies + PostHog analytics, toggle in Profile)
+
+Seed real content for all five in the migration — no placeholders. Admin can edit from panel.
+
+Link them in:
+- Login footer: "By continuing, you agree to [Terms] and [Privacy Policy]."
+- Signup checkbox: "I am 18+ and agree to [Terms], [Privacy Policy], [Guidelines]."
+- Profile → Legal section
+- Community pinned banner: "Be kind. No patient names. [Read guidelines]"
+- Footer on legal pages
+
+On signup, save consent to `users.metadata`: `terms_accepted_at`, `privacy_accepted_at`, `guidelines_accepted_at`, `terms_version`, `age_confirmed`.
+
+---
+
+## INTERACTION RULES
+
+- Every toggle button (bookmark, like, mastered) fills and unfills instantly, no spinner, optimistic update, silent Supabase write, revert on failure with toast.
+- Double-tap prevention: debounce 300ms.
+- Counter updates use RPC functions, never direct UPDATE (RLS blocks counters).
+- All modals are bottom sheets on mobile. Escape closes. Backdrop tap closes. Focus trap. Body scroll locked.
+- Destructive actions (delete, report, remove) require confirm modal.
+- Toasts: top of screen, 3s auto-dismiss, one at a time. Types: success/error/info/warning.
+- Skeleton loaders, not spinners. Max 300ms before content or error.
+- Empty states with icon, headline, body, action button. Never blank screen.
+- Pull-to-refresh on community and interview list (custom, no browser default).
+- Every button wired to Supabase. No UI-only buttons except share and download.
+- Offline writes queue in IndexedDB, sync in background, revert on failure.
+
+---
+
+## ACCESSIBILITY
+
+- All images have alt text
+- All icon-only buttons have aria-label
+- Focus rings visible: 2px outline `#58a6ff`, offset 2px (this is the ONE exception to the no-border rule — accessibility focus is allowed)
+- Color contrast meets WCAG AA
+- Forms have `<label for>` linked to inputs
+- Error messages have `aria-describedby`
+- Modals have `role="dialog"`, `aria-modal`, `aria-labelledby`
+- Toasts use `role="status"` `aria-live="polite"`, errors `role="alert"` `aria-live="assertive"`
+- Respect `prefers-reduced-motion` (disable animations)
+- Respect `prefers-color-scheme` (default to system theme)
+- Skip-to-content link on every page
+
+---
+
+## FILE STRUCTURE
+
+```
+src/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── globals.css
+│   ├── (auth)/login/page.tsx
+│   ├── (auth)/signup/page.tsx
+│   ├── (app)/today/page.tsx
+│   ├── (app)/interview/page.tsx
+│   ├── (app)/interview/[slug]/page.tsx
+│   ├── (app)/community/page.tsx
+│   ├── (app)/profile/page.tsx
+│   ├── (app)/paywall/page.tsx
+│   ├── admin/page.tsx
+│   ├── privacy/page.tsx
+│   ├── terms/page.tsx
+│   ├── guidelines/page.tsx
+│   ├── data-deletion/page.tsx
+│   └── cookies/page.tsx
+├── components/
+│   ├── BottomNav.tsx
+│   ├── ScenarioCard.tsx
+│   ├── ToggleButton.tsx
+│   ├── Select.tsx
+│   ├── Modal.tsx
+│   ├── Toast.tsx
+│   ├── Skeleton.tsx
+│   ├── EmptyState.tsx
+│   ├── ErrorBoundary.tsx
+│   ├── ConfirmDialog.tsx
+│   ├── OfflineBanner.tsx
+│   ├── PullToRefresh.tsx
+│   ├── EmailNotConfirmed.tsx
+│   ├── ForgotPasswordModal.tsx
+│   ├── LegalPage.tsx
+│   └── LegalFooter.tsx
+├── features/
+│   ├── scenarios/
+│   ├── community/
+│   ├── progress/
+│   ├── payments/
+│   ├── facilities/
+│   └── auth/
+├── lib/
+│   ├── supabase/client.ts
+│   ├── supabase/server.ts
+│   ├── types.ts
+│   ├── constants.ts
+│   ├── theme.ts
+│   ├── toast
