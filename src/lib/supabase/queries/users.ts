@@ -78,10 +78,22 @@ export async function updateMe(
 
 export async function recordActiveToday(): Promise<{ ok: boolean; newStreak?: number }> {
   try {
-    const { data, error } = await supabase.rpc('increment_streak');
+    const { data: authData } = await supabase.auth.getUser();
+
+    // Guests have no users row and no streak to increment.
+    // Skip the RPC entirely for unauthenticated sessions.
+    if (!authData?.user) {
+      return { ok: false };
+    }
+
+    const { data, error } = await supabase.rpc('increment_streak', {
+      p_user_id: authData.user.id,
+    });
+
     if (error) {
       return { ok: false };
     }
+
     return { ok: true, newStreak: data as number };
   } catch {
     return { ok: false };
